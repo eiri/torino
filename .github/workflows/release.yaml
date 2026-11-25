@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: $/.github/workflows/tests.yml
+
+  release:
+    needs: tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+
+      - name: Build picotool
+        run: |
+          git init target/host-deps/pico-sdk
+          git -C target/host-deps/pico-sdk remote add origin https://github.com/raspberrypi/pico-sdk.git
+          git -C target/host-deps/pico-sdk fetch --depth 1 origin a1438dff1d38bd9c65dbd693f0e5db4b9ae91779
+          git -C target/host-deps/pico-sdk checkout --detach FETCH_HEAD
+          git init target/tools/picotool-src
+          git -C target/tools/picotool-src remote add origin https://github.com/raspberrypi/picotool.git
+          git -C target/tools/picotool-src fetch --depth 1 origin a7eb3988f0645239185fadb4e25d8279478c2dbb
+          git -C target/tools/picotool-src checkout --detach FETCH_HEAD
+          cmake -S target/tools/picotool-src -B target/tools/picotool \
+            -DPICO_SDK_PATH="$PWD/target/host-deps/pico-sdk" -DPICOTOOL_NO_LIBUSB=1
+          cmake --build target/tools/picotool --parallel
+
+      - name: Build firmware
+        env:
+          ARM_GCC_ROOT: /usr
+          PICOTOOL: ${{ github.workspace }}/target/tools/picotool/picotool
+        run: bash scripts/build.sh
+
+      - uses: googleapis/release-please-action@v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Upload firmware
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          cd target/build
+          sha256sum torino.uf2 > SHA256SUMS
+          gh release upload "$TAG" torino.uf2 SHA256SUMS --clobber

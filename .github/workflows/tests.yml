@@ -1,0 +1,19 @@
+name: Tests
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - run: cmake -S . -B target/tests -DTORINO_TESTS=ON
+      - run: cmake --build target/tests --parallel
+      - run: ctest --test-dir target/tests --output-on-failure
